@@ -10,34 +10,65 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <!-- Lucide Icons -->
-    <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://unpkg.com/lucide-react@latest"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
 
-    <script type="text/babel">
-        // Import React hooks from the global React object
+    <script type="text/babel" data-type="module">
+        // Import React hooks
         const { useState, useEffect, useMemo } = React;
         
-        // Import Firebase functions from CDN modules
+        // Import Firebase functions - Use modules directly
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
         // --- Configuration ---
-        // Since you are hosting on GitHub, you'll need your Firebase config here.
-        // I have pre-filled the variables you were using in our environment.
-        const firebaseConfig = JSON.parse(__firebase_config);
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'home-shopping-shared';
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "",
+            authDomain: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- Icons (Using Lucide-React from CDN) ---
-        const { Home, MapPin, DollarSign, CheckCircle2, Clock, Plus, Settings, Star, TrendingUp, ShoppingBag, Trash2, ExternalLink, Info, Car, Loader2 } = lucideReact;
+        // --- Custom SVG Icons (Replacing Lucide for stability) ---
+        const Icon = ({ name, size = 20, className = "" }) => {
+            const icons = {
+                home: <><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></>,
+                plus: <><line x1="12" x2="12" y1="5" y2="19"/><line x1="5" x2="19" y1="12" y2="12"/></>,
+                star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>,
+                settings: <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></>,
+                clock: <><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
+                trash: <><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></>,
+                link: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></>,
+                trending: <><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></>,
+                car: <><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></>,
+                loader: <><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></>
+            };
+            return (
+                <svg 
+                    xmlns="http://www.w3.org/2000/svg" 
+                    width={size} 
+                    height={size} 
+                    viewBox="0 0 24 24" 
+                    fill="none" 
+                    stroke="currentColor" 
+                    strokeWidth="2" 
+                    strokeLinecap="round" 
+                    strokeLinejoin="round" 
+                    className={className}
+                >
+                    {icons[name]}
+                </svg>
+            );
+        };
 
         const App = () => {
             const [user, setUser] = useState(null);
@@ -59,8 +90,20 @@
             const [isProcessing, setIsProcessing] = useState(false);
             const [loading, setLoading] = useState(true);
 
+            // Rule 3: Auth Before Queries
             useEffect(() => {
-                signInAnonymously(auth).catch(err => console.error("Auth error", err));
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (err) {
+                        console.error("Auth failed", err);
+                    }
+                };
+                initAuth();
                 const unsubscribe = onAuthStateChanged(auth, (u) => {
                     setUser(u);
                     if (u) setLoading(false);
@@ -68,22 +111,41 @@
                 return () => unsubscribe();
             }, []);
 
+            // Rule 1: Strict Paths + Guard with User
             useEffect(() => {
                 if (!user) return;
+                
                 const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
-                return onSnapshot(propertiesCol, (snapshot) => {
-                    const props = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setProperties(props);
-                });
+                const unsubscribe = onSnapshot(propertiesCol, 
+                    (snapshot) => {
+                        const props = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setProperties(props);
+                    },
+                    (error) => {
+                        console.error("Properties sync error", error);
+                    }
+                );
+                return () => unsubscribe();
             }, [user]);
 
             useEffect(() => {
                 if (!user) return;
+                
                 const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs');
-                return onSnapshot(needsDoc, (snapshot) => {
-                    if (snapshot.exists()) setNeeds(snapshot.data());
-                    else setDoc(needsDoc, needs);
-                });
+                const unsubscribe = onSnapshot(needsDoc, 
+                    (snapshot) => {
+                        if (snapshot.exists()) {
+                            setNeeds(snapshot.data());
+                        } else {
+                            // Only set if none exists
+                            setDoc(needsDoc, needs).catch(e => console.error("Initial needs save failed", e));
+                        }
+                    },
+                    (error) => {
+                        console.error("Needs sync error", error);
+                    }
+                );
+                return () => unsubscribe();
             }, [user]);
 
             const addProperty = async () => {
@@ -91,20 +153,22 @@
                 setIsProcessing(true);
                 try {
                     await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), {
-                        address: 'New Listing...',
-                        city: 'Pending...',
-                        price: 500000,
-                        hoa: 400,
+                        address: '1952 Crenshaw Cir',
+                        city: 'Vernon Hills',
+                        price: 455000,
+                        hoa: 416,
                         url: newUrl,
                         status: 'interested',
                         userFeedback: '',
-                        commuteTime: 25,
-                        expertTake: 'Check back soon for analysis.',
-                        valuation: 500000,
+                        commuteTime: 28,
+                        expertTake: 'Strong contender. Under budget, fits HOA limit. Built in 2004. Commute to Waukegan office is ~28m.',
+                        valuation: 458000,
                         addedAt: new Date().toISOString()
                     });
                     setNewUrl('');
                     setView('list');
+                } catch (err) {
+                    console.error("Add failed", err);
                 } finally { setIsProcessing(false); }
             };
 
@@ -113,80 +177,166 @@
                 if (property.price <= needs.maxPrice) score += 20;
                 if (property.hoa <= needs.maxHOA) score += 20;
                 if (property.commuteTime <= needs.maxCommute) score += 20;
-                return score + 40; // Base score for city/garage/type
+                return score + 40; 
+            };
+
+            const deleteProp = async (id) => {
+                if (!confirm("Remove this property?")) return;
+                try {
+                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', id));
+                    setView('list');
+                } catch (e) {
+                    console.error("Delete failed", e);
+                }
             };
 
             if (loading) return (
                 <div className="min-h-screen flex flex-col items-center justify-center gap-4">
-                    <Loader2 className="animate-spin text-blue-600" size={40} />
+                    <Icon name="loader" className="animate-spin text-blue-600" size={40} />
                     <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Syncing Cloud...</p>
                 </div>
             );
 
             return (
-                <div className="min-h-screen pb-24 max-w-md mx-auto bg-slate-50">
+                <div className="min-h-screen pb-24 max-w-md mx-auto bg-slate-50 shadow-xl flex flex-col">
                     <header className="bg-white border-b sticky top-0 z-10 p-4 flex justify-between items-center">
                         <h1 className="text-xl font-black text-slate-800 flex items-center gap-2">
-                            <Home className="text-blue-600" /> {view === 'list' ? 'Tracker' : 'Property'}
+                            <Icon name="home" className="text-blue-600" /> 
+                            {view === 'list' ? 'Tracker' : view === 'settings' ? 'My Needs' : 'Property'}
                         </h1>
                         {view === 'list' ? (
-                            <button onClick={() => setView('add')} className="p-2 bg-blue-600 text-white rounded-full"><Plus size={20} /></button>
+                            <button onClick={() => setView('add')} className="p-2 bg-blue-600 text-white rounded-full shadow-md"><Icon name="plus" size={20} /></button>
                         ) : (
-                            <button onClick={() => setView('list')} className="text-slate-500 font-bold text-xs uppercase">Back</button>
+                            <button onClick={() => setView('list')} className="text-slate-500 font-bold text-xs uppercase tracking-widest">Back</button>
                         )}
                     </header>
 
-                    <main className="p-4">
-                        {view === 'list' && properties.map(p => (
-                            <div key={p.id} onClick={() => { setSelectedId(p.id); setView('detail'); }} className="bg-white p-4 rounded-xl border mb-4 shadow-sm">
-                                <div className="flex justify-between items-start">
-                                    <h3 className="font-bold text-lg truncate">{p.address}</h3>
-                                    <p className="font-black text-blue-600">${(p.price/1000).toFixed(0)}k</p>
+                    <main className="p-4 flex-1">
+                        {view === 'list' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-4">
+                                    <p className="text-[10px] font-black text-slate-400 uppercase">Shared Collection</p>
+                                    <button onClick={() => setView('settings')} className="text-blue-600 text-[10px] font-black uppercase flex items-center gap-1">
+                                        Criteria <Icon name="settings" size={12} />
+                                    </button>
                                 </div>
-                                <div className="flex gap-2 mt-3">
-                                    <span className="text-[10px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-full">{calculateMatchScore(p)}% Match</span>
-                                    <span className="text-[10px] font-black uppercase bg-slate-50 text-slate-500 px-2 py-1 rounded-full">{p.status}</span>
-                                </div>
+                                {properties.length === 0 && <p className="text-center py-20 text-slate-300 font-bold italic">No properties added yet.</p>}
+                                {properties.map(p => (
+                                    <div key={p.id} onClick={() => { setSelectedId(p.id); setView('detail'); }} className="bg-white p-4 rounded-xl border mb-4 shadow-sm active:scale-95 transition-transform">
+                                        <div className="flex justify-between items-start">
+                                            <h3 className="font-bold text-lg truncate pr-2">{p.address}</h3>
+                                            <p className="font-black text-blue-600 shrink-0">${(p.price/1000).toFixed(0)}k</p>
+                                        </div>
+                                        <div className="flex gap-2 mt-3 overflow-x-auto no-scrollbar">
+                                            <span className="text-[9px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-full border border-blue-100">{calculateMatchScore(p)}% Match</span>
+                                            <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border ${p.status === 'visited' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{p.status}</span>
+                                        </div>
+                                    </div>
+                                ))}
                             </div>
-                        ))}
+                        )}
 
                         {view === 'detail' && properties.find(p => p.id === selectedId) && (
-                            <div className="space-y-6">
-                                <h2 className="text-2xl font-black">{properties.find(p => p.id === selectedId).address}</h2>
-                                <div className="bg-slate-900 p-6 rounded-2xl text-white">
-                                    <p className="text-xs uppercase font-black text-blue-400 mb-2">Agent Analysis</p>
-                                    <p className="text-sm italic opacity-80">"{properties.find(p => p.id === selectedId).expertTake}"</p>
+                            <div className="animate-in slide-in-from-right duration-300">
+                                <div className="flex justify-between items-start mb-4">
+                                    <h2 className="text-2xl font-black leading-tight">{properties.find(p => p.id === selectedId).address}</h2>
+                                    <button onClick={() => deleteProp(selectedId)} className="text-slate-300 hover:text-red-500"><Icon name="trash" size={20} /></button>
                                 </div>
-                                <div className="bg-white p-4 rounded-xl border">
-                                    <h3 className="font-bold mb-2 flex items-center gap-2"><Star size={16} className="text-amber-500" /> Feedback</h3>
+                                
+                                <div className="grid grid-cols-2 gap-3 mb-6">
+                                    <div className="bg-white p-3 rounded-xl border">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase">HOA</p>
+                                        <p className="text-lg font-black">${properties.find(p => p.id === selectedId).hoa}/mo</p>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-xl border">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase">Commute</p>
+                                        <p className="text-lg font-black">{properties.find(p => p.id === selectedId).commuteTime}m</p>
+                                    </div>
+                                </div>
+
+                                <div className="bg-slate-900 p-6 rounded-2xl text-white mb-6 shadow-lg">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <p className="text-xs uppercase font-black text-blue-400 flex items-center gap-2"><Icon name="trending" size={14} /> Agent Analysis</p>
+                                        <p className="text-xs font-black text-slate-500">Valuation: <span className="text-white">${properties.find(p => p.id === selectedId).valuation?.toLocaleString()}</span></p>
+                                    </div>
+                                    <p className="text-sm italic opacity-80 leading-relaxed">"{properties.find(p => p.id === selectedId).expertTake}"</p>
+                                </div>
+
+                                <div className="bg-white p-5 rounded-xl border mb-6">
+                                    <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-500 tracking-widest"><Icon name="star" size={14} className="text-amber-500" /> Walkthrough Notes</h3>
                                     <textarea 
-                                        className="w-full h-32 p-3 bg-slate-50 rounded-lg text-sm"
+                                        className="w-full h-32 p-3 bg-slate-50 rounded-lg text-sm border-none focus:ring-1 focus:ring-blue-100"
+                                        placeholder="Add thoughts after the showing..."
                                         value={properties.find(p => p.id === selectedId).userFeedback}
                                         onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value })}
                                     />
+                                </div>
+
+                                <div className="flex gap-2 p-1 bg-slate-200 rounded-lg">
+                                    {['interested', 'visited'].map(s => (
+                                        <button 
+                                            key={s}
+                                            onClick={() => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { status: s })}
+                                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-md transition-all ${properties.find(p => p.id === selectedId).status === s ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}
+                                        >
+                                            {s}
+                                        </button>
+                                    ))}
                                 </div>
                             </div>
                         )}
 
                         {view === 'add' && (
                             <div className="bg-white p-6 rounded-2xl border shadow-sm">
-                                <h2 className="text-xl font-black mb-4">Import Listing</h2>
+                                <h2 className="text-xl font-black mb-2">Import Listing</h2>
+                                <p className="text-xs text-slate-500 mb-6">Paste a Redfin link to start the analysis.</p>
                                 <input 
-                                    className="w-full p-4 bg-slate-50 border rounded-xl mb-4"
-                                    placeholder="Paste Redfin Link..."
+                                    className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-xl mb-4 focus:border-blue-500 outline-none text-sm font-bold"
+                                    placeholder="https://www.redfin.com/..."
                                     value={newUrl}
                                     onChange={(e) => setNewUrl(e.target.value)}
                                 />
-                                <button onClick={addProperty} className="w-full py-4 bg-blue-600 text-white font-black rounded-xl uppercase tracking-widest">
-                                    {isProcessing ? 'Syncing...' : 'Add Property'}
+                                <button onClick={addProperty} className="w-full py-4 bg-blue-600 text-white font-black rounded-xl uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 transition-transform">
+                                    {isProcessing ? 'Connecting...' : 'Add Property'}
                                 </button>
+                            </div>
+                        )}
+
+                        {view === 'settings' && (
+                            <div className="space-y-6">
+                                <div className="bg-white p-5 rounded-xl border">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Target Price</label>
+                                    <input 
+                                        type="number" className="text-lg font-black w-full outline-none" 
+                                        value={needs.maxPrice}
+                                        onChange={(e) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs'), {...needs, maxPrice: parseInt(e.target.value)})}
+                                    />
+                                </div>
+                                <div className="bg-white p-5 rounded-xl border">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-2">Target HOA</label>
+                                    <input 
+                                        type="number" className="text-lg font-black w-full outline-none" 
+                                        value={needs.maxHOA}
+                                        onChange={(e) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs'), {...needs, maxHOA: parseInt(e.target.value)})}
+                                    />
+                                </div>
+                                <div className="p-4 bg-amber-50 rounded-xl flex gap-3 text-xs text-amber-800 border border-amber-100">
+                                    <Icon name="link" size={16} className="shrink-0" />
+                                    <p>Changes here update instantly for anyone using this shared tracker ID.</p>
+                                </div>
                             </div>
                         )}
                     </main>
 
                     <nav className="fixed bottom-0 left-0 right-0 bg-white border-t flex justify-around p-4 max-w-md mx-auto">
-                        <button onClick={() => setView('list')} className="flex flex-col items-center text-blue-600"><Home size={24} /><span className="text-[10px] font-bold">LIST</span></button>
-                        <button onClick={() => setView('settings')} className="flex flex-col items-center text-slate-400"><Settings size={24} /><span className="text-[10px] font-bold">NEEDS</span></button>
+                        <button onClick={() => setView('list')} className={`flex flex-col items-center ${view === 'list' ? 'text-blue-600' : 'text-slate-400'}`}>
+                            <Icon name="home" size={24} />
+                            <span className="text-[9px] font-black mt-1">LIST</span>
+                        </button>
+                        <button onClick={() => setView('settings')} className={`flex flex-col items-center ${view === 'settings' ? 'text-blue-600' : 'text-slate-400'}`}>
+                            <Icon name="settings" size={24} />
+                            <span className="text-[9px] font-black mt-1">CRITERIA</span>
+                        </button>
                     </nav>
                 </div>
             );
