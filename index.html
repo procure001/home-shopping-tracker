@@ -46,7 +46,6 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- App Identity (Strict Pathing Rule 1) ---
         const appId = "home-shopping-shared-v1";
 
         // --- Custom SVG Icons ---
@@ -262,7 +261,7 @@
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-10 p-4 flex justify-between items-center safe-top">
                         <h1 className="text-xl font-black text-slate-800 flex items-center gap-2">
                             <Icon name="home" className="text-blue-600" /> 
-                            {view === 'list' ? 'Home Hub' : view === 'settings' ? 'My Goals' : 'Details'}
+                            {view === 'list' ? 'Home Hub' : view === 'settings' ? 'My Goals' : 'Property'}
                         </h1>
                         <div className="flex gap-2">
                             {view === 'list' ? (
@@ -336,13 +335,25 @@
                                 </div>
 
                                 <div className="flex justify-between items-start mb-6 px-1">
-                                    <div className="flex-1">
-                                        <h2 className="text-2xl font-black leading-tight tracking-tight text-slate-900 uppercase">{activeProp.address}</h2>
-                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest font-black">{activeProp.city}, IL</p>
+                                    <div className="flex-1 pr-4">
+                                        <input 
+                                            className="w-full text-2xl font-black leading-tight tracking-tight text-slate-900 uppercase bg-transparent border-none outline-none focus:ring-1 focus:ring-blue-100 rounded p-1"
+                                            value={activeProp.address}
+                                            onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { address: e.target.value.toUpperCase() })}
+                                        />
+                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest font-black px-1">{activeProp.city}, IL</p>
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-2xl font-black text-blue-600 tracking-tighter font-black">${activeProp.price.toLocaleString()}</p>
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-black">Listing Price</p>
+                                    <div className="text-right shrink-0">
+                                        <div className="flex items-center justify-end text-blue-600">
+                                            <span className="text-2xl font-black tracking-tighter">$</span>
+                                            <input 
+                                                type="number"
+                                                className="text-2xl font-black tracking-tighter bg-transparent border-none outline-none w-28 text-right focus:ring-1 focus:ring-blue-100 rounded p-1"
+                                                value={activeProp.price}
+                                                onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { price: parseInt(e.target.value) || 0 })}
+                                            />
+                                        </div>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-black pr-1">Asking Price</p>
                                     </div>
                                 </div>
 
@@ -373,7 +384,7 @@
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 mb-6 shadow-sm">
                                     <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-500 tracking-widest font-black"><Icon name="star" size={14} className="text-amber-500" /> Walkthrough Notes</h3>
                                     <textarea 
-                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed font-black"
+                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed font-black outline-none"
                                         placeholder="Add thoughts after showing..."
                                         value={activeProp.userFeedback}
                                         onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value })}
