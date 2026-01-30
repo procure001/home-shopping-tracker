@@ -46,7 +46,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
-        // --- App Identity (Required for Firestore Security Paths) ---
+        // --- App Identity (Strict Pathing Rule 1) ---
         const appId = "home-shopping-shared-v1";
 
         // --- Custom SVG Icons ---
@@ -75,6 +75,7 @@
         const App = () => {
             const [user, setUser] = useState(null);
             const [authError, setAuthError] = useState(null);
+            const [permError, setPermError] = useState(false);
             const [properties, setProperties] = useState([]);
             const [needs, setNeeds] = useState({
                 maxPrice: 550000,
@@ -89,13 +90,13 @@
             const [newUrl, setNewUrl] = useState('');
             const [isProcessing, setIsProcessing] = useState(false);
             const [loading, setLoading] = useState(true);
-            const [deletingId, setDeletingId] = useState(null); // For custom modal
+            const [deletingId, setDeletingId] = useState(null);
 
-            // --- Authentication Initialization ---
+            // --- Rule 3: Auth Before Queries ---
             useEffect(() => {
                 const initAuth = async () => {
                     try {
-                        const token = typeof __initial_auth_token !== 'undefined' && __initial_auth_token;
+                        const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
                         if (token) {
                             try { await signInWithCustomToken(auth, token); } 
                             catch { await signInAnonymously(auth); }
@@ -103,9 +104,7 @@
                             await signInAnonymously(auth);
                         }
                     } catch (err) {
-                        setAuthError(err.code === 'auth/configuration-not-found' 
-                            ? "Please enable 'Anonymous' sign-in in Firebase Console." 
-                            : err.message);
+                        setAuthError(err.message);
                         setLoading(false);
                     }
                 };
@@ -116,22 +115,39 @@
                 return () => unsubscribe();
             }, []);
 
-            // --- Data Sync ---
+            // --- Rule 1 & Rule 2: Strict Paths & Simple Queries ---
             useEffect(() => {
                 if (!user) return;
+                
                 const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
                 const unsubscribeProps = onSnapshot(query(propertiesCol), 
-                    (snapshot) => setProperties(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
-                    (err) => console.error("Properties Sync Error:", err)
+                    (snapshot) => {
+                        setProperties(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                        setPermError(false);
+                    },
+                    (err) => {
+                        if (err.code === 'permission-denied') setPermError(true);
+                        console.error("Firestore Props Error:", err);
+                    }
                 );
+
                 const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shared_needs');
                 const unsubscribeNeeds = onSnapshot(needsDoc, 
                     (snapshot) => {
                         if (snapshot.exists()) setNeeds(snapshot.data());
-                        else setDoc(needsDoc, needs).catch(e => console.error("Setup Error:", e));
+                        else {
+                            // Only set if we haven't already
+                            setDoc(needsDoc, needs).catch(e => {
+                                if (e.code === 'permission-denied') setPermError(true);
+                            });
+                        }
                     },
-                    (err) => console.error("Settings Sync Error:", err)
+                    (err) => {
+                        if (err.code === 'permission-denied') setPermError(true);
+                        console.error("Firestore Settings Error:", err);
+                    }
                 );
+
                 return () => { unsubscribeProps(); unsubscribeNeeds(); };
             }, [user]);
 
@@ -141,7 +157,7 @@
                 try {
                     const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
                     await addDoc(propertiesCol, {
-                        address: 'New Property Entry',
+                        address: 'New Entry',
                         city: 'Vernon Hills',
                         price: 455000,
                         hoa: 416,
@@ -149,12 +165,14 @@
                         status: 'interested',
                         userFeedback: '',
                         commuteTime: 22,
-                        expertTake: 'Under budget. 2004 Build. Strong match for location.',
+                        expertTake: 'Under budget. 2004 Build. Strong location match.',
                         valuation: 458000,
                         addedAt: new Date().toISOString()
                     });
                     setNewUrl('');
                     setView('list');
+                } catch (e) {
+                    if (e.code === 'permission-denied') setPermError(true);
                 } finally { setIsProcessing(false); }
             };
 
@@ -165,7 +183,7 @@
                     setDeletingId(null);
                     setView('list');
                 } catch (e) {
-                    console.error("Delete failed:", e);
+                    if (e.code === 'permission-denied') setPermError(true);
                 }
             };
 
@@ -177,19 +195,41 @@
                 return score + 40; 
             };
 
+            if (permError) return (
+                <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center bg-slate-50">
+                    <Icon name="alert" size={64} className="text-amber-500 mb-6" />
+                    <h1 className="text-2xl font-black mb-4 uppercase text-slate-800 tracking-tighter">Database Locked</h1>
+                    <p className="text-sm text-slate-500 mb-8 max-w-xs leading-relaxed">
+                        You need to update your **Firestore Security Rules** to allow this app to read and write data.
+                    </p>
+                    <div className="bg-slate-900 p-5 rounded-2xl border text-left text-[11px] mb-8 w-full max-w-sm overflow-x-auto shadow-xl">
+                        <code className="text-emerald-400">
+                            service cloud.firestore {"{"}<br/>
+                            &nbsp;&nbsp;match /databases/{"{"}database{"}"}/documents {"{"}<br/>
+                            &nbsp;&nbsp;&nbsp;&nbsp;match /artifacts/{"{"}appId{"}"}/public/data/{"{"}col=**{"}"} {"{"}<br/>
+                            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;allow read, write: if true;<br/>
+                            &nbsp;&nbsp;&nbsp;&nbsp;{"}"}<br/>
+                            &nbsp;&nbsp;{"}"}<br/>
+                            {"}"}
+                        </code>
+                    </div>
+                    <button onClick={() => window.location.reload()} className="px-10 py-4 bg-blue-600 text-white rounded-full font-black text-xs uppercase tracking-widest shadow-xl active:scale-95 transition-transform">Rules Updated? Retry</button>
+                </div>
+            );
+
             if (authError) return (
                 <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center bg-slate-50">
                     <Icon name="alert" size={48} className="text-rose-500 mb-4" />
-                    <h1 className="text-lg font-black mb-4 uppercase text-slate-800 tracking-tighter">Connection Failed</h1>
-                    <p className="text-sm text-slate-500 mb-8 max-w-xs">{authError}</p>
-                    <button onClick={() => window.location.reload()} className="px-8 py-3 bg-blue-600 text-white rounded-full font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-transform">Retry Sync</button>
+                    <h1 className="text-lg font-black mb-4 uppercase text-slate-800 tracking-tighter">Auth Error</h1>
+                    <p className="text-sm text-slate-500 mb-8">{authError}</p>
+                    <button onClick={() => window.location.reload()} className="px-8 py-3 bg-blue-600 text-white rounded-full font-black text-xs uppercase shadow-lg">Retry</button>
                 </div>
             );
 
             if (loading) return (
                 <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
                     <Icon name="loader" className="animate-spin text-blue-600" size={40} />
-                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Waking database...</p>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Connecting to Cloud...</p>
                 </div>
             );
 
@@ -197,18 +237,17 @@
 
             return (
                 <div className="min-h-screen pb-24 max-w-md mx-auto bg-slate-50 shadow-2xl flex flex-col border-x border-slate-200">
-                    {/* Delete Confirmation Modal */}
                     {deletingId && (
-                        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm animate-in fade-in duration-200">
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
                             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl animate-in zoom-in-95 duration-200">
                                 <div className="w-12 h-12 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mb-4">
                                     <Icon name="trash" size={24} />
                                 </div>
-                                <h3 className="text-lg font-black text-slate-800 mb-2">Delete this entry?</h3>
-                                <p className="text-sm text-slate-500 mb-6 leading-relaxed">This action cannot be undone. It will be removed from both your lists.</p>
+                                <h3 className="text-lg font-black text-slate-800 mb-2 font-black">Delete house?</h3>
+                                <p className="text-sm text-slate-500 mb-6 leading-relaxed">It will be removed from both your lists immediately.</p>
                                 <div className="flex gap-3">
                                     <button onClick={() => setDeletingId(null)} className="flex-1 py-3 text-xs font-black uppercase bg-slate-100 text-slate-500 rounded-xl">Cancel</button>
-                                    <button onClick={confirmDelete} className="flex-1 py-3 text-xs font-black uppercase bg-rose-600 text-white rounded-xl shadow-lg shadow-rose-100">Delete</button>
+                                    <button onClick={confirmDelete} className="flex-1 py-3 text-xs font-black uppercase bg-rose-600 text-white rounded-xl">Delete</button>
                                 </div>
                             </div>
                         </div>
@@ -232,14 +271,14 @@
                         {view === 'list' && (
                             <div>
                                 <div className="flex justify-between items-center mb-4">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Shared Sync Active</p>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest uppercase">Live Shared Sync</p>
                                     <button onClick={() => setView('settings')} className="text-blue-600 text-[10px] font-black uppercase flex items-center gap-1 tracking-widest">
-                                        Criteria <Icon name="settings" size={12} />
+                                        Goals <Icon name="settings" size={12} />
                                     </button>
                                 </div>
                                 {properties.length === 0 && <p className="text-center py-20 text-slate-300 font-bold italic tracking-tight uppercase text-[10px]">No entries found</p>}
                                 {properties.map(p => (
-                                    <div key={p.id} className="bg-white p-4 rounded-xl border mb-4 shadow-sm active:scale-95 transition-transform cursor-pointer relative group overflow-hidden">
+                                    <div key={p.id} className="bg-white p-4 rounded-xl border mb-4 shadow-sm active:scale-95 transition-transform cursor-pointer relative group">
                                         <div onClick={() => { setSelectedId(p.id); setView('detail'); }} className="flex justify-between items-start">
                                             <div className="flex-1 pr-8">
                                                 <h3 className="font-bold text-lg truncate tracking-tight text-slate-800">{p.address}</h3>
@@ -250,7 +289,7 @@
                                         <div className="flex justify-between items-center mt-4">
                                             <div className="flex gap-2">
                                                 <span className="text-[9px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-full border border-blue-100">{calculateMatchScore(p)}% Match</span>
-                                                <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border ${p.status === 'visited' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-slate-50 text-slate-500 border-slate-100'}`}>{p.status}</span>
+                                                <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border ${p.status === 'visited' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-slate-50 text-slate-500'}`}>{p.status}</span>
                                             </div>
                                             <button 
                                                 onClick={(e) => { e.stopPropagation(); setDeletingId(p.id); }}
@@ -269,37 +308,34 @@
                                 <div className="flex justify-between items-start mb-6">
                                     <div className="flex-1">
                                         <h2 className="text-2xl font-black leading-tight tracking-tight text-slate-900">{activeProp.address}</h2>
-                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">{activeProp.city}, IL</p>
+                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest font-black">{activeProp.city}, IL</p>
                                     </div>
                                     <button onClick={() => setDeletingId(selectedId)} className="p-2 text-slate-300 hover:text-rose-500 transition-colors"><Icon name="trash" size={24} /></button>
                                 </div>
                                 
                                 <div className="grid grid-cols-2 gap-3 mb-6">
-                                    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">HOA Fee</p>
-                                        <p className="text-xl font-black text-slate-800">${activeProp.hoa}<span className="text-xs text-slate-300">/mo</span></p>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 font-black">HOA Fee</p>
+                                        <p className="text-xl font-black text-slate-800 font-black">${activeProp.hoa}<span className="text-xs text-slate-300">/mo</span></p>
                                     </div>
-                                    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Commute</p>
-                                        <p className="text-xl font-black text-slate-800">{activeProp.commuteTime}<span className="text-xs text-slate-300">m</span></p>
+                                    <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 font-black">Drive</p>
+                                        <p className="text-xl font-black text-slate-800 font-black">{activeProp.commuteTime}<span className="text-xs text-slate-300">m</span></p>
                                     </div>
                                 </div>
 
                                 <div className="bg-slate-900 p-6 rounded-3xl text-white mb-6 shadow-xl relative overflow-hidden">
-                                    <div className="absolute top-0 right-0 p-4 opacity-10">
-                                        <Icon name="trending" size={80} />
-                                    </div>
                                     <div className="flex justify-between items-center mb-4 relative z-10">
-                                        <p className="text-xs uppercase font-black text-blue-400 flex items-center gap-2 tracking-widest"><Icon name="trending" size={14} /> Agent Take</p>
-                                        <p className="text-xs font-black text-slate-500">Value: <span className="text-white">${activeProp.valuation?.toLocaleString()}</span></p>
+                                        <p className="text-xs uppercase font-black text-blue-400 flex items-center gap-2 tracking-widest font-black"><Icon name="trending" size={14} /> Agent Analysis</p>
+                                        <p className="text-xs font-black text-slate-500 font-black">Valuation: <span className="text-white font-black">${activeProp.valuation?.toLocaleString()}</span></p>
                                     </div>
-                                    <p className="text-sm italic text-slate-300 leading-relaxed font-medium relative z-10">"{activeProp.expertTake}"</p>
+                                    <p className="text-sm italic text-slate-300 leading-relaxed font-medium relative z-10 font-black">"{activeProp.expertTake}"</p>
                                 </div>
 
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 mb-6 shadow-sm">
-                                    <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-500 tracking-widest"><Icon name="star" size={14} className="text-amber-500" /> Walkthrough Notes</h3>
+                                    <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-500 tracking-widest font-black"><Icon name="star" size={14} className="text-amber-500" /> Walkthrough Notes</h3>
                                     <textarea 
-                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed"
+                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed font-black"
                                         placeholder="Add thoughts after showing..."
                                         value={activeProp.userFeedback}
                                         onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value })}
@@ -325,26 +361,26 @@
                                 <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
                                     <Icon name="plus" size={32} />
                                 </div>
-                                <h2 className="text-2xl font-black mb-2 tracking-tight text-slate-800">New Entry</h2>
-                                <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed">Paste the Redfin link. We'll automatically start the analysis.</p>
+                                <h2 className="text-2xl font-black mb-2 tracking-tight text-slate-800 font-black">New Entry</h2>
+                                <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed font-black">Paste the Redfin link below.</p>
                                 <input 
                                     className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl mb-4 focus:border-blue-500 outline-none text-sm font-bold transition-all"
                                     placeholder="https://www.redfin.com/..."
                                     value={newUrl}
                                     onChange={(e) => setNewUrl(e.target.value)}
                                 />
-                                <button onClick={addProperty} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 transition-transform flex items-center justify-center gap-2">
-                                    {isProcessing ? <Icon name="loader" className="animate-spin" /> : 'Add to List'}
+                                <button onClick={addProperty} disabled={isProcessing} className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl uppercase tracking-widest shadow-lg shadow-blue-100 active:scale-95 flex items-center justify-center gap-2">
+                                    {isProcessing ? <Icon name="loader" className="animate-spin" /> : 'Add to Shared List'}
                                 </button>
                             </div>
                         )}
 
                         {view === 'settings' && (
                             <div className="space-y-6">
-                                <h2 className="text-2xl font-black tracking-tighter text-slate-800">Global Search Goals</h2>
+                                <h2 className="text-2xl font-black tracking-tighter text-slate-800 font-black">Search Goals</h2>
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest">Max Budget</label>
-                                    <div className="flex items-center gap-2">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest font-black">Max Budget</label>
+                                    <div className="flex items-center gap-2 font-black">
                                         <span className="text-xl font-black text-slate-300">$</span>
                                         <input 
                                             type="number" className="text-2xl font-black w-full outline-none text-slate-800" 
@@ -354,19 +390,15 @@
                                     </div>
                                 </div>
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
-                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest">Max HOA</label>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xl font-black text-slate-300">$</span>
+                                    <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest font-black">Max HOA</label>
+                                    <div className="flex items-center gap-2 font-black">
+                                        <span className="text-xl font-black text-slate-300 font-black">$</span>
                                         <input 
                                             type="number" className="text-2xl font-black w-full outline-none text-slate-800" 
                                             value={needs.maxHOA}
                                             onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shared_needs'), { maxHOA: parseInt(e.target.value) })}
                                         />
                                     </div>
-                                </div>
-                                <div className="p-4 bg-blue-50 rounded-2xl flex gap-3 text-xs text-blue-800 border border-blue-100">
-                                    <Icon name="check" size={16} className="shrink-0" />
-                                    <p className="font-bold">Syncing is active. Updates here will re-rank your shared property list instantly.</p>
                                 </div>
                             </div>
                         )}
@@ -375,11 +407,11 @@
                     <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-4 max-w-md mx-auto rounded-t-3xl shadow-2xl safe-bottom">
                         <button onClick={() => setView('list')} className={`flex flex-col items-center gap-1 transition-colors ${view === 'list' ? 'text-blue-600' : 'text-slate-400'}`}>
                             <Icon name="home" size={24} />
-                            <span className="text-[9px] font-black uppercase tracking-widest">My List</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest font-black">List</span>
                         </button>
                         <button onClick={() => setView('settings')} className={`flex flex-col items-center gap-1 transition-colors ${view === 'settings' ? 'text-blue-600' : 'text-slate-400'}`}>
                             <Icon name="settings" size={24} />
-                            <span className="text-[9px] font-black uppercase tracking-widest">Goals</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest font-black">Goals</span>
                         </button>
                     </nav>
                 </div>
@@ -394,15 +426,9 @@
         .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-        @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
         @keyframes zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        @keyframes slide-in-bottom { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        @keyframes slide-in-right { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
         .animate-in { animation-fill-mode: both; }
-        .fade-in { animation-name: fade-in; }
         .zoom-in-95 { animation-name: zoom-in; }
-        .slide-in-from-bottom { animation-name: slide-in-bottom; }
-        .slide-in-from-right { animation-name: slide-in-right; }
     </style>
 </body>
 </html>
