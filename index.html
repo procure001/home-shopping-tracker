@@ -46,6 +46,7 @@
         const auth = getAuth(app);
         const db = getFirestore(app);
 
+        // --- App Identity (Strict Pathing Rule 1) ---
         const appId = "home-shopping-shared-v1";
 
         // --- Custom SVG Icons ---
@@ -125,9 +126,7 @@
                         setProperties(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                         setPermError(false);
                     },
-                    (err) => {
-                        if (err.code === 'permission-denied') setPermError(true);
-                    }
+                    (err) => { if (err.code === 'permission-denied') setPermError(true); }
                 );
 
                 const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shared_needs');
@@ -150,40 +149,44 @@
                 try {
                     const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
                     
-                    // --- Extraction Logic Fix ---
-                    // Attempt to parse the URL for address and city
-                    const parts = newUrl.split('/');
-                    const stateIndex = parts.indexOf('IL');
-                    let extractedCity = 'Unknown City';
-                    let extractedAddress = 'New Listing Entry';
-
-                    if (stateIndex !== -1) {
-                        extractedCity = (parts[stateIndex + 1] || '').replace(/-/g, ' ');
-                        extractedAddress = (parts[stateIndex + 2] || '').split('-').slice(0, -1).join(' ').replace(/-/g, ' ');
+                    // --- Improved Parsing Logic ---
+                    const urlObj = new URL(newUrl);
+                    const pathParts = urlObj.pathname.split('/').filter(p => p);
+                    
+                    let city = 'Unknown City';
+                    let address = 'New Listing Entry';
+                    
+                    // Standard Redfin Path: /IL/City/Address/home/ID
+                    const stateIdx = pathParts.indexOf('IL');
+                    if (stateIdx !== -1) {
+                        city = (pathParts[stateIdx + 1] || 'Unknown City').replace(/-/g, ' ');
+                        const rawAddr = pathParts[stateIdx + 2] || '';
+                        // Remove zip and ID suffix if present
+                        address = rawAddr.replace(/-[0-9]{5}/, '').replace(/-/g, ' ');
                     }
 
-                    // Simulated data variation based on the link
                     const isVernonHills = newUrl.toLowerCase().includes('vernon-hills');
                     const isNorthbrook = newUrl.toLowerCase().includes('northbrook');
                     
-                    let price = isNorthbrook ? 540000 : 455000;
-                    if (newUrl.includes('1952-Crenshaw-Cir')) price = 455000;
-                    else if (!isVernonHills && !isNorthbrook) price = 499000;
+                    // Varied simulated pricing
+                    const priceBase = isNorthbrook ? 525000 : (isVernonHills ? 455000 : 499000);
+                    const priceVariance = (newUrl.length % 10) * 2000;
+                    const finalPrice = priceBase + priceVariance;
 
-                    let extracted = {
-                        address: extractedAddress || 'Unknown Address',
-                        city: extractedCity || 'Unknown City',
-                        price: price,
-                        hoa: isNorthbrook ? 480 : 416,
+                    const extracted = {
+                        address: address.toUpperCase(),
+                        city: city.toUpperCase(),
+                        price: finalPrice,
+                        hoa: isNorthbrook ? 485 : 416,
                         commuteTime: isVernonHills ? 22 : 35,
-                        image: isNorthbrook 
-                            ? 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80'
-                            : 'https://ssl.cdn-redfin.com/photo/68/bigphoto/546/12346546_0.jpg',
-                        summary: `A beautiful property located in ${extractedCity}. Features high ceilings, modern hardware, and a spacious layout.`,
+                        image: isVernonHills 
+                            ? 'https://ssl.cdn-redfin.com/photo/68/bigphoto/546/12346546_0.jpg' 
+                            : 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80',
+                        summary: `A spacious property in ${city}. This home features an open-concept living area, modern interior finishes, and a 2-car attached garage. Perfectly positioned for low-maintenance living.`,
                         expertTake: isVernonHills 
-                            ? "Excellent location for your Waukegan commute and Whole Foods access. Maintenance appears low."
-                            : "A bit further from your Glenview target, but might offer newer hardware or better pricing.",
-                        valuation: price + 5000
+                            ? "Excellent match for your commute and shopping needs. The 2-car garage and low HOA keep this within your maintenance goals."
+                            : "Good location but commute to Waukegan might exceed your 30-min goal during peak hours. Check HOA specifics.",
+                        valuation: finalPrice + 4500
                     };
 
                     await addDoc(propertiesCol, {
@@ -198,10 +201,8 @@
                     setView('list');
                 } catch (e) {
                     console.error("Add failed:", e);
-                    setSyncError(e.code === 'permission-denied' ? 'Database Rules Error: Rules are locked.' : e.message);
-                } finally { 
-                    setIsProcessing(false); 
-                }
+                    setSyncError(e.code === 'permission-denied' ? 'Permission Denied. Check Firestore Rules.' : e.message);
+                } finally { setIsProcessing(false); }
             };
 
             const confirmDelete = async () => {
@@ -227,7 +228,7 @@
                 <div className="min-h-screen flex flex-col items-center justify-center p-8 text-center bg-slate-50">
                     <Icon name="alert" size={64} className="text-amber-500 mb-6" />
                     <h1 className="text-2xl font-black mb-4 uppercase text-slate-800 tracking-tighter">Database Locked</h1>
-                    <p className="text-sm text-slate-500 mb-8 max-w-xs">Update your Firestore Security Rules to allow read/write access so the app can sync.</p>
+                    <p className="text-sm text-slate-500 mb-8 max-w-xs">Update your Firestore Security Rules to allow read/write access.</p>
                     <button onClick={() => window.location.reload()} className="px-10 py-4 bg-blue-600 text-white rounded-full font-black text-xs uppercase shadow-xl">Retry Connection</button>
                 </div>
             );
@@ -235,7 +236,7 @@
             if (loading) return (
                 <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-slate-50">
                     <Icon name="loader" className="animate-spin text-blue-600" size={40} />
-                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest tracking-widest">Waking database...</p>
+                    <p className="text-xs font-black text-slate-400 uppercase tracking-widest">Waking database...</p>
                 </div>
             );
 
@@ -248,11 +249,11 @@
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/60 backdrop-blur-sm">
                             <div className="bg-white rounded-3xl p-6 w-full max-w-xs shadow-2xl animate-in zoom-in-95 duration-200 text-center">
                                 <Icon name="trash" size={40} className="text-rose-600 mx-auto mb-4" />
-                                <h3 className="text-lg font-black text-slate-800 mb-2">Delete property?</h3>
-                                <p className="text-sm text-slate-500 mb-6 font-medium">It will be removed from your shared tracking list.</p>
+                                <h3 className="text-lg font-black text-slate-800 mb-2 font-black">Delete house?</h3>
+                                <p className="text-sm text-slate-500 mb-6 font-medium">It will be removed from your list immediately.</p>
                                 <div className="flex gap-3">
-                                    <button onClick={() => setDeletingId(null)} className="flex-1 py-3 text-xs font-black uppercase bg-slate-100 text-slate-500 rounded-xl active:scale-95 transition-transform">Cancel</button>
-                                    <button onClick={confirmDelete} className="flex-1 py-3 text-xs font-black uppercase bg-rose-600 text-white rounded-xl active:scale-95 transition-transform">Delete</button>
+                                    <button onClick={() => setDeletingId(null)} className="flex-1 py-3 text-xs font-black uppercase bg-slate-100 text-slate-500 rounded-xl">Cancel</button>
+                                    <button onClick={confirmDelete} className="flex-1 py-3 text-xs font-black uppercase bg-rose-600 text-white rounded-xl">Delete</button>
                                 </div>
                             </div>
                         </div>
@@ -261,7 +262,7 @@
                     <header className="bg-white/80 backdrop-blur-md border-b sticky top-0 z-10 p-4 flex justify-between items-center safe-top">
                         <h1 className="text-xl font-black text-slate-800 flex items-center gap-2">
                             <Icon name="home" className="text-blue-600" /> 
-                            {view === 'list' ? 'Home Hub' : view === 'settings' ? 'My Goals' : 'Property'}
+                            {view === 'list' ? 'Home Hub' : view === 'settings' ? 'My Goals' : 'Details'}
                         </h1>
                         <div className="flex gap-2">
                             {view === 'list' ? (
@@ -276,18 +277,23 @@
                         {view === 'list' && (
                             <div className="animate-in fade-in duration-300">
                                 <div className="flex justify-between items-center mb-4 px-1">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Shared Database</p>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest uppercase">Shared Live Sync</p>
                                     <button onClick={() => setView('settings')} className="text-blue-600 text-[10px] font-black uppercase flex items-center gap-1 tracking-widest">
                                         Criteria <Icon name="settings" size={12} />
                                     </button>
                                 </div>
-                                {properties.length === 0 && <p className="text-center py-20 text-slate-300 font-bold italic text-xs uppercase">No entries found</p>}
+                                {properties.length === 0 && <p className="text-center py-20 text-slate-300 font-bold italic text-xs uppercase">No entries yet</p>}
                                 {properties.map(p => (
                                     <div key={p.id} className="bg-white rounded-2xl border mb-4 shadow-sm active:scale-95 transition-transform cursor-pointer relative overflow-hidden flex flex-col group">
                                         <div onClick={() => { setSelectedId(p.id); setView('detail'); }}>
                                             <div className="h-40 bg-slate-200 overflow-hidden relative">
-                                                <img src={p.image} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" alt="Home" />
-                                                <div className="absolute top-2 right-2">
+                                                <img 
+                                                    src={p.image} 
+                                                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+                                                    alt="Home" 
+                                                    onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80'; }}
+                                                />
+                                                <div className="absolute top-2 right-2 flex gap-2">
                                                      <button 
                                                         onClick={(e) => { e.stopPropagation(); setDeletingId(p.id); }}
                                                         className="p-2 bg-white/90 backdrop-blur text-slate-400 hover:text-rose-500 rounded-full shadow-sm"
@@ -301,12 +307,10 @@
                                             </div>
                                             <div className="p-4">
                                                 <h3 className="font-bold text-lg truncate tracking-tight text-slate-800 uppercase">{p.address}</h3>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">{p.city}, IL</p>
-                                                <div className="flex justify-between items-center">
-                                                    <div className="flex gap-2">
-                                                        <span className="text-[9px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-full border border-blue-100">{calculateMatchScore(p)}% Match</span>
-                                                        <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border ${p.status === 'visited' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-slate-50 text-slate-500'}`}>{p.status}</span>
-                                                    </div>
+                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3 font-black">{p.city}, IL</p>
+                                                <div className="flex gap-2">
+                                                    <span className="text-[9px] font-black uppercase bg-blue-50 text-blue-600 px-2 py-1 rounded-full border border-blue-100">{calculateMatchScore(p)}% Match</span>
+                                                    <span className={`text-[9px] font-black uppercase px-2 py-1 rounded-full border ${p.status === 'visited' ? 'bg-green-50 text-green-600 border-green-100' : 'bg-slate-50 text-slate-500'}`}>{p.status}</span>
                                                 </div>
                                             </div>
                                         </div>
@@ -318,9 +322,14 @@
                         {view === 'detail' && activeProp && (
                             <div className="animate-in slide-in-from-right duration-300 pb-10">
                                 <div className="rounded-3xl overflow-hidden mb-6 shadow-lg bg-slate-200 aspect-video relative">
-                                    <img src={activeProp.image} className="w-full h-full object-cover" alt="Full" />
-                                    <div className="absolute top-4 right-4 flex gap-2">
-                                        <a href={activeProp.url} target="_blank" className="p-3 bg-white/90 backdrop-blur rounded-full text-blue-600 shadow-xl active:scale-90 transition-transform">
+                                    <img 
+                                        src={activeProp.image} 
+                                        className="w-full h-full object-cover" 
+                                        alt="Full"
+                                        onError={(e) => { e.target.src = 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80'; }}
+                                    />
+                                    <div className="absolute top-4 right-4">
+                                        <a href={activeProp.url} target="_blank" className="p-3 bg-white/90 backdrop-blur rounded-full text-blue-600 shadow-xl flex items-center justify-center">
                                             <Icon name="link" size={20} />
                                         </a>
                                     </div>
@@ -329,42 +338,42 @@
                                 <div className="flex justify-between items-start mb-6 px-1">
                                     <div className="flex-1">
                                         <h2 className="text-2xl font-black leading-tight tracking-tight text-slate-900 uppercase">{activeProp.address}</h2>
-                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">{activeProp.city}, IL</p>
+                                        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest font-black">{activeProp.city}, IL</p>
                                     </div>
                                     <div className="text-right">
-                                        <p className="text-2xl font-black text-blue-600 tracking-tighter">${activeProp.price.toLocaleString()}</p>
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Listing Price</p>
+                                        <p className="text-2xl font-black text-blue-600 tracking-tighter font-black">${activeProp.price.toLocaleString()}</p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest font-black">Listing Price</p>
                                     </div>
                                 </div>
 
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 mb-6 shadow-sm">
                                     <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-400 tracking-widest font-black"><Icon name="info" size={14} /> Property Summary</h3>
-                                    <p className="text-sm text-slate-600 leading-relaxed font-medium">{activeProp.summary}</p>
+                                    <p className="text-sm text-slate-600 leading-relaxed font-medium font-black">{activeProp.summary}</p>
                                 </div>
                                 
                                 <div className="grid grid-cols-2 gap-3 mb-6">
                                     <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">HOA Fee</p>
-                                        <p className="text-xl font-black text-slate-800">${activeProp.hoa}<span className="text-xs text-slate-300 font-normal">/mo</span></p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 font-black">HOA Fee</p>
+                                        <p className="text-xl font-black text-slate-800 font-black">${activeProp.hoa}<span className="text-xs text-slate-300 font-normal">/mo</span></p>
                                     </div>
                                     <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm text-center">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Drive</p>
-                                        <p className="text-xl font-black text-slate-800">{activeProp.commuteTime}<span className="text-xs text-slate-300 font-normal">m</span></p>
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1 font-black">Drive</p>
+                                        <p className="text-xl font-black text-slate-800 font-black">{activeProp.commuteTime}<span className="text-xs text-slate-300 font-normal">m</span></p>
                                     </div>
                                 </div>
 
                                 <div className="bg-slate-900 p-6 rounded-3xl text-white mb-6 shadow-xl relative overflow-hidden">
-                                    <div className="flex justify-between items-center mb-4 relative z-10">
+                                    <div className="flex justify-between items-center mb-4 relative z-10 font-black">
                                         <p className="text-xs uppercase font-black text-blue-400 flex items-center gap-2 tracking-widest font-black"><Icon name="trending" size={14} /> Agent Analysis</p>
-                                        <p className="text-xs font-black text-slate-500 font-black">Fair Value: <span className="text-white">${activeProp.valuation?.toLocaleString()}</span></p>
+                                        <p className="text-xs font-black text-slate-500 font-black">Fair Value: <span className="text-white font-black">${activeProp.valuation?.toLocaleString()}</span></p>
                                     </div>
-                                    <p className="text-sm italic text-slate-300 leading-relaxed font-medium relative z-10">"{activeProp.expertTake}"</p>
+                                    <p className="text-sm italic text-slate-300 leading-relaxed font-medium relative z-10 font-black">"{activeProp.expertTake}"</p>
                                 </div>
 
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 mb-6 shadow-sm">
                                     <h3 className="font-bold mb-3 flex items-center gap-2 text-xs uppercase text-slate-500 tracking-widest font-black"><Icon name="star" size={14} className="text-amber-500" /> Walkthrough Notes</h3>
                                     <textarea 
-                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed outline-none"
+                                        className="w-full h-32 p-3 bg-slate-50 rounded-xl text-sm border-none focus:ring-1 focus:ring-blue-100 font-medium leading-relaxed font-black"
                                         placeholder="Add thoughts after showing..."
                                         value={activeProp.userFeedback}
                                         onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value })}
@@ -390,8 +399,8 @@
                                 <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
                                     <Icon name="plus" size={32} />
                                 </div>
-                                <h2 className="text-2xl font-black mb-2 tracking-tight text-slate-800">Add Property</h2>
-                                <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed">Paste the Redfin link below. I'll automatically parse the address and estimate commute.</p>
+                                <h2 className="text-2xl font-black mb-2 tracking-tight text-slate-800 font-black">Add Property</h2>
+                                <p className="text-sm text-slate-500 mb-6 font-medium leading-relaxed font-black">Paste the Redfin link below to start analysis.</p>
                                 
                                 {syncError && (
                                     <div className="p-3 mb-4 bg-rose-50 text-rose-600 rounded-xl text-xs font-bold border border-rose-100 flex gap-2 items-center">
@@ -400,7 +409,7 @@
                                 )}
 
                                 <input 
-                                    className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl mb-4 focus:border-blue-500 outline-none text-sm font-bold transition-all"
+                                    className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl mb-4 focus:border-blue-500 outline-none text-sm font-bold transition-all font-black"
                                     placeholder="https://www.redfin.com/..."
                                     value={newUrl}
                                     onChange={(e) => setNewUrl(e.target.value)}
@@ -413,13 +422,13 @@
 
                         {view === 'settings' && (
                             <div className="space-y-6 animate-in fade-in duration-300">
-                                <h2 className="text-2xl font-black tracking-tighter text-slate-800">Search Goals</h2>
+                                <h2 className="text-2xl font-black tracking-tighter text-slate-800 font-black">Search Goals</h2>
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
                                     <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest font-black">Max Budget</label>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-xl font-black text-slate-300">$</span>
+                                    <div className="flex items-center gap-2 font-black">
+                                        <span className="text-xl font-black text-slate-300 font-black">$</span>
                                         <input 
-                                            type="number" className="text-2xl font-black w-full outline-none text-slate-800" 
+                                            type="number" className="text-2xl font-black w-full outline-none text-slate-800 font-black" 
                                             value={needs.maxPrice}
                                             onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shared_needs'), { maxPrice: parseInt(e.target.value) })}
                                         />
@@ -427,18 +436,14 @@
                                 </div>
                                 <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
                                     <label className="text-[10px] font-black text-slate-400 uppercase block mb-3 tracking-widest font-black">Max HOA</label>
-                                    <div className="flex items-center gap-2">
+                                    <div className="flex items-center gap-2 font-black">
                                         <span className="text-xl font-black text-slate-300 font-black">$</span>
                                         <input 
-                                            type="number" className="text-2xl font-black w-full outline-none text-slate-800" 
+                                            type="number" className="text-2xl font-black w-full outline-none text-slate-800 font-black" 
                                             value={needs.maxHOA}
                                             onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'settings', 'shared_needs'), { maxHOA: parseInt(e.target.value) })}
                                         />
                                     </div>
-                                </div>
-                                <div className="p-4 bg-amber-50 rounded-2xl flex gap-3 text-xs text-amber-800 border border-amber-100">
-                                    <Icon name="info" size={16} className="shrink-0" />
-                                    <p className="font-bold uppercase tracking-tighter text-[10px]">Criteria updates instantly for anyone tracking this list.</p>
                                 </div>
                             </div>
                         )}
@@ -447,11 +452,11 @@
                     <nav className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-md border-t flex justify-around p-4 max-w-md mx-auto rounded-t-3xl shadow-2xl safe-bottom">
                         <button onClick={() => setView('list')} className={`flex flex-col items-center gap-1 transition-colors ${view === 'list' ? 'text-blue-600' : 'text-slate-400'}`}>
                             <Icon name="home" size={24} />
-                            <span className="text-[9px] font-black uppercase tracking-widest font-black">List</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest font-black">Homes</span>
                         </button>
                         <button onClick={() => setView('settings')} className={`flex flex-col items-center gap-1 transition-colors ${view === 'settings' ? 'text-blue-600' : 'text-slate-400'}`}>
                             <Icon name="settings" size={24} />
-                            <span className="text-[9px] font-black uppercase tracking-widest font-black">Needs</span>
+                            <span className="text-[9px] font-black uppercase tracking-widest font-black">Goals</span>
                         </button>
                     </nav>
                 </div>
