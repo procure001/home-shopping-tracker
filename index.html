@@ -23,22 +23,21 @@
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
         import { getFirestore, collection, doc, setDoc, onSnapshot, deleteDoc, addDoc, updateDoc } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-firestore.js";
 
-        // --- Configuration ---
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
-            apiKey: "",
-            authDomain: "",
-            projectId: "",
-            storageBucket: "",
-            messagingSenderId: "",
-            appId: ""
-        };
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        // --- Configuration Handling ---
+        let firebaseConfig = null;
+        try {
+            // Only use internal config if it exists (in this preview env)
+            firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config 
+                ? JSON.parse(__firebase_config) 
+                : null;
+        } catch (e) {
+            console.warn("Internal config failed, checking for manual setup");
+        }
 
-        const app = initializeApp(firebaseConfig);
-        const auth = getAuth(app);
-        const db = getFirestore(app);
+        // --- APP CONSTANTS ---
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'shared-tracker-v1';
 
-        // --- Custom SVG Icons (Replacing Lucide for stability) ---
+        // --- Custom SVG Icons ---
         const Icon = ({ name, size = 20, className = "" }) => {
             const icons = {
                 home: <><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></>,
@@ -50,7 +49,8 @@
                 link: <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" x2="21" y1="14" y2="3"/></>,
                 trending: <><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></>,
                 car: <><path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><circle cx="17" cy="17" r="2"/></>,
-                loader: <><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></>
+                loader: <><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></>,
+                alert: <><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></>
             };
             return (
                 <svg 
@@ -71,6 +71,9 @@
         };
 
         const App = () => {
+            const [isConfigured, setIsConfigured] = useState(!!firebaseConfig);
+            const [db, setDb] = useState(null);
+            const [auth, setAuth] = useState(null);
             const [user, setUser] = useState(null);
             const [properties, setProperties] = useState([]);
             const [needs, setNeeds] = useState({
@@ -90,86 +93,100 @@
             const [isProcessing, setIsProcessing] = useState(false);
             const [loading, setLoading] = useState(true);
 
-            // Rule 3: Auth Before Queries
+            // Initialize Firebase only if config exists
             useEffect(() => {
-                const initAuth = async () => {
+                if (firebaseConfig && firebaseConfig.apiKey) {
                     try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await signInWithCustomToken(auth, __initial_auth_token);
-                        } else {
-                            await signInAnonymously(auth);
-                        }
+                        const app = initializeApp(firebaseConfig);
+                        const fbAuth = getAuth(app);
+                        const fbDb = getFirestore(app);
+                        setAuth(fbAuth);
+                        setDb(fbDb);
+
+                        const initAuth = async () => {
+                            if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                                await signInWithCustomToken(fbAuth, __initial_auth_token);
+                            } else {
+                                await signInAnonymously(fbAuth);
+                            }
+                        };
+                        initAuth();
+                        onAuthStateChanged(fbAuth, (u) => {
+                            setUser(u);
+                            setLoading(false);
+                        });
                     } catch (err) {
-                        console.error("Auth failed", err);
+                        console.error("Firebase init failed", err);
+                        setLoading(false);
+                        setIsConfigured(false);
                     }
-                };
-                initAuth();
-                const unsubscribe = onAuthStateChanged(auth, (u) => {
-                    setUser(u);
-                    if (u) setLoading(false);
-                });
-                return () => unsubscribe();
+                } else {
+                    setLoading(false);
+                    setIsConfigured(false);
+                }
             }, []);
 
-            // Rule 1: Strict Paths + Guard with User
+            // Data Sync (Cloud)
             useEffect(() => {
-                if (!user) return;
-                
+                if (!user || !db) return;
                 const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
-                const unsubscribe = onSnapshot(propertiesCol, 
-                    (snapshot) => {
-                        const props = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setProperties(props);
-                    },
-                    (error) => {
-                        console.error("Properties sync error", error);
-                    }
-                );
-                return () => unsubscribe();
-            }, [user]);
+                return onSnapshot(propertiesCol, (snapshot) => {
+                    setProperties(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                });
+            }, [user, db]);
 
-            useEffect(() => {
-                if (!user) return;
-                
-                const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs');
-                const unsubscribe = onSnapshot(needsDoc, 
-                    (snapshot) => {
-                        if (snapshot.exists()) {
-                            setNeeds(snapshot.data());
-                        } else {
-                            // Only set if none exists
-                            setDoc(needsDoc, needs).catch(e => console.error("Initial needs save failed", e));
-                        }
-                    },
-                    (error) => {
-                        console.error("Needs sync error", error);
-                    }
+            // If not configured, show instructions
+            if (!isConfigured) {
+                return (
+                    <div className="min-h-screen p-8 bg-slate-900 text-white flex flex-col items-center justify-center text-center">
+                        <Icon name="alert" size={48} className="text-amber-400 mb-4" />
+                        <h1 className="text-2xl font-black mb-4 uppercase tracking-tight">Cloud Setup Required</h1>
+                        <p className="text-slate-400 text-sm mb-8 max-w-xs">
+                            To use the <strong>Shared Database</strong> feature on GitHub, you need your own Firebase keys.
+                        </p>
+                        <div className="bg-slate-800 p-6 rounded-2xl text-left w-full max-w-sm border border-slate-700">
+                            <h2 className="text-xs font-bold text-blue-400 uppercase mb-4">Steps to fix:</h2>
+                            <ol className="text-xs space-y-3 text-slate-300 list-decimal pl-4">
+                                <li>Go to <a href="https://console.firebase.google.com" target="_blank" className="text-blue-400 underline">Firebase Console</a> and create a project.</li>
+                                <li>Add a "Web App" and copy the <strong>firebaseConfig</strong> object.</li>
+                                <li>In your <code>index.html</code>, find the <code>firebaseConfig</code> line and replace it with your keys.</li>
+                            </ol>
+                        </div>
+                        <button 
+                            onClick={() => setIsConfigured(true)} 
+                            className="mt-8 text-xs font-bold text-slate-500 uppercase tracking-widest border border-slate-700 px-6 py-3 rounded-full"
+                        >
+                            Try to Run Anyway (Local Mode)
+                        </button>
+                    </div>
                 );
-                return () => unsubscribe();
-            }, [user]);
+            }
 
             const addProperty = async () => {
-                if (!newUrl || !user) return;
+                if (!newUrl) return;
                 setIsProcessing(true);
-                try {
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), {
-                        address: '1952 Crenshaw Cir',
-                        city: 'Vernon Hills',
-                        price: 455000,
-                        hoa: 416,
-                        url: newUrl,
-                        status: 'interested',
-                        userFeedback: '',
-                        commuteTime: 28,
-                        expertTake: 'Strong contender. Under budget, fits HOA limit. Built in 2004. Commute to Waukegan office is ~28m.',
-                        valuation: 458000,
-                        addedAt: new Date().toISOString()
-                    });
-                    setNewUrl('');
-                    setView('list');
-                } catch (err) {
-                    console.error("Add failed", err);
-                } finally { setIsProcessing(false); }
+                const payload = {
+                    address: '1952 Crenshaw Cir',
+                    city: 'Vernon Hills',
+                    price: 455000,
+                    hoa: 416,
+                    url: newUrl,
+                    status: 'interested',
+                    userFeedback: '',
+                    commuteTime: 28,
+                    expertTake: 'Strong contender. Under budget, fits HOA limit. Built in 2004. Commute to Waukegan office is ~28m.',
+                    valuation: 458000,
+                    addedAt: new Date().toISOString()
+                };
+
+                if (db) {
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), payload);
+                } else {
+                    setProperties([...properties, { ...payload, id: Date.now().toString() }]);
+                }
+                setNewUrl('');
+                setView('list');
+                setIsProcessing(false);
             };
 
             const calculateMatchScore = (property) => {
@@ -180,20 +197,10 @@
                 return score + 40; 
             };
 
-            const deleteProp = async (id) => {
-                if (!confirm("Remove this property?")) return;
-                try {
-                    await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', id));
-                    setView('list');
-                } catch (e) {
-                    console.error("Delete failed", e);
-                }
-            };
-
             if (loading) return (
                 <div className="min-h-screen flex flex-col items-center justify-center gap-4">
                     <Icon name="loader" className="animate-spin text-blue-600" size={40} />
-                    <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Syncing Cloud...</p>
+                    <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Waking up database...</p>
                 </div>
             );
 
@@ -204,18 +211,22 @@
                             <Icon name="home" className="text-blue-600" /> 
                             {view === 'list' ? 'Tracker' : view === 'settings' ? 'My Needs' : 'Property'}
                         </h1>
-                        {view === 'list' ? (
-                            <button onClick={() => setView('add')} className="p-2 bg-blue-600 text-white rounded-full shadow-md"><Icon name="plus" size={20} /></button>
-                        ) : (
-                            <button onClick={() => setView('list')} className="text-slate-500 font-bold text-xs uppercase tracking-widest">Back</button>
-                        )}
+                        <div className="flex gap-2">
+                            {view === 'list' ? (
+                                <button onClick={() => setView('add')} className="p-2 bg-blue-600 text-white rounded-full shadow-md"><Icon name="plus" size={20} /></button>
+                            ) : (
+                                <button onClick={() => setView('list')} className="text-slate-500 font-bold text-xs uppercase tracking-widest">Back</button>
+                            )}
+                        </div>
                     </header>
 
                     <main className="p-4 flex-1">
                         {view === 'list' && (
                             <div>
                                 <div className="flex justify-between items-center mb-4">
-                                    <p className="text-[10px] font-black text-slate-400 uppercase">Shared Collection</p>
+                                    <p className="text-[10px] font-black text-slate-400 uppercase">
+                                        {db ? "Synced Shared Collection" : "Local Preview Mode"}
+                                    </p>
                                     <button onClick={() => setView('settings')} className="text-blue-600 text-[10px] font-black uppercase flex items-center gap-1">
                                         Criteria <Icon name="settings" size={12} />
                                     </button>
@@ -240,7 +251,11 @@
                             <div className="animate-in slide-in-from-right duration-300">
                                 <div className="flex justify-between items-start mb-4">
                                     <h2 className="text-2xl font-black leading-tight">{properties.find(p => p.id === selectedId).address}</h2>
-                                    <button onClick={() => deleteProp(selectedId)} className="text-slate-300 hover:text-red-500"><Icon name="trash" size={20} /></button>
+                                    <button onClick={() => {
+                                        if (db) deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId));
+                                        else setProperties(properties.filter(p => p.id !== selectedId));
+                                        setView('list');
+                                    }} className="text-slate-300 hover:text-red-500"><Icon name="trash" size={20} /></button>
                                 </div>
                                 
                                 <div className="grid grid-cols-2 gap-3 mb-6">
@@ -268,20 +283,10 @@
                                         className="w-full h-32 p-3 bg-slate-50 rounded-lg text-sm border-none focus:ring-1 focus:ring-blue-100"
                                         placeholder="Add thoughts after the showing..."
                                         value={properties.find(p => p.id === selectedId).userFeedback}
-                                        onChange={(e) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value })}
+                                        onChange={(e) => {
+                                            if (db) updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { userFeedback: e.target.value });
+                                        }}
                                     />
-                                </div>
-
-                                <div className="flex gap-2 p-1 bg-slate-200 rounded-lg">
-                                    {['interested', 'visited'].map(s => (
-                                        <button 
-                                            key={s}
-                                            onClick={() => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', selectedId), { status: s })}
-                                            className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-md transition-all ${properties.find(p => p.id === selectedId).status === s ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}
-                                        >
-                                            {s}
-                                        </button>
-                                    ))}
                                 </div>
                             </div>
                         )}
@@ -309,7 +314,7 @@
                                     <input 
                                         type="number" className="text-lg font-black w-full outline-none" 
                                         value={needs.maxPrice}
-                                        onChange={(e) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs'), {...needs, maxPrice: parseInt(e.target.value)})}
+                                        onChange={(e) => setNeeds({...needs, maxPrice: parseInt(e.target.value)})}
                                     />
                                 </div>
                                 <div className="bg-white p-5 rounded-xl border">
@@ -317,12 +322,8 @@
                                     <input 
                                         type="number" className="text-lg font-black w-full outline-none" 
                                         value={needs.maxHOA}
-                                        onChange={(e) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs'), {...needs, maxHOA: parseInt(e.target.value)})}
+                                        onChange={(e) => setNeeds({...needs, maxHOA: parseInt(e.target.value)})}
                                     />
-                                </div>
-                                <div className="p-4 bg-amber-50 rounded-xl flex gap-3 text-xs text-amber-800 border border-amber-100">
-                                    <Icon name="link" size={16} className="shrink-0" />
-                                    <p>Changes here update instantly for anyone using this shared tracker ID.</p>
                                 </div>
                             </div>
                         )}
