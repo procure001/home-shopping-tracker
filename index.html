@@ -1,0 +1,530 @@
+import React, { useState, useEffect, useMemo } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithCustomToken, 
+  signInAnonymously, 
+  onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  setDoc, 
+  onSnapshot, 
+  deleteDoc, 
+  query, 
+  addDoc,
+  updateDoc
+} from 'firebase/firestore';
+import { 
+  Home, 
+  MapPin, 
+  DollarSign, 
+  CheckCircle2, 
+  Clock, 
+  Plus, 
+  Settings, 
+  Star, 
+  TrendingUp, 
+  ShoppingBag,
+  Trash2,
+  ExternalLink,
+  Info,
+  Car,
+  Loader2
+} from 'lucide-react';
+
+// --- Firebase Configuration & Initialization ---
+const firebaseConfig = JSON.parse(__firebase_config);
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'home-shopping-default';
+
+const App = () => {
+  // --- State ---
+  const [user, setUser] = useState(null);
+  const [properties, setProperties] = useState([]);
+  const [needs, setNeeds] = useState({
+    maxPrice: 550000,
+    maxHOA: 500,
+    targetCities: ['Vernon Hills', 'Northbrook', 'Glenview'],
+    preferredType: 'Townhouse',
+    essentialStores: ['Whole Foods', 'Costco', 'Trader Joes'],
+    garageMin: 2,
+    workAddress: '1675 S Lakeside Dr, Waukegan, IL',
+    maxCommute: 30
+  });
+
+  const [view, setView] = useState('list');
+  const [selectedId, setSelectedId] = useState(null);
+  const [newUrl, setNewUrl] = useState('');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  // --- Auth Effect (Rule 3) ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth failed", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- Data Sync Effect (Properties) ---
+  useEffect(() => {
+    if (!user) return;
+    
+    // We use a public path for sharing with gf
+    const propertiesCol = collection(db, 'artifacts', appId, 'public', 'data', 'properties');
+    
+    const unsubscribe = onSnapshot(propertiesCol, 
+      (snapshot) => {
+        const props = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setProperties(props);
+        
+        // If list is empty, add the initial property
+        if (props.length === 0) {
+          initializeDefaultProperty();
+        }
+      },
+      (error) => console.error("Properties sync error", error)
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Data Sync Effect (Needs) ---
+  useEffect(() => {
+    if (!user) return;
+    
+    const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs');
+    
+    const unsubscribe = onSnapshot(needsDoc, 
+      (snapshot) => {
+        if (snapshot.exists()) {
+          setNeeds(snapshot.data());
+        } else {
+          // Save initial needs if none exist
+          setDoc(needsDoc, needs);
+        }
+      },
+      (error) => console.error("Needs sync error", error)
+    );
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Actions ---
+  const initializeDefaultProperty = async () => {
+    const initialProp = {
+      address: '1952 Crenshaw Cir',
+      city: 'Vernon Hills',
+      state: 'IL',
+      zip: '60061',
+      price: 455000,
+      hoa: 416,
+      sqft: 2274,
+      beds: 3,
+      baths: 2,
+      garage: 2,
+      yearBuilt: 2004,
+      url: 'https://www.redfin.com/IL/Vernon-Hills/1952-Crenshaw-Cir-60061/home/14363739',
+      type: 'Attached Single / Condo',
+      status: 'interested',
+      userFeedback: '',
+      commuteTime: 28,
+      expertTake: "Strong contender. Under budget, fits HOA limit. Built in 2004 (modern mechanicals). Commute to Waukegan is ~28m, right on the threshold. Unbeatable proximity to Mellody Farm Whole Foods.",
+      valuation: 458000,
+      addedAt: new Date().toISOString()
+    };
+    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), initialProp);
+  };
+
+  const addPropertyByUrl = async () => {
+    if (!newUrl || !user) return;
+    setIsProcessing(true);
+    
+    try {
+      // Simulation of data extraction
+      const newProp = {
+        address: 'Extracted Property...',
+        city: 'Northbrook',
+        state: 'IL',
+        zip: '60062',
+        price: 525000,
+        hoa: 380,
+        sqft: 2000,
+        beds: 3,
+        baths: 2.5,
+        garage: 2,
+        yearBuilt: 2010,
+        url: newUrl,
+        type: 'Townhouse',
+        status: 'interested',
+        userFeedback: '',
+        commuteTime: 32,
+        expertTake: 'Great location for Glenview proximity. Commute to Waukegan will be slightly longer (~32m). Market value is slightly higher due to Northbrook school district.',
+        valuation: 530000,
+        addedAt: new Date().toISOString()
+      };
+      
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), newProp);
+      setNewUrl('');
+      setView('list');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const updatePropertyStatus = async (id, status) => {
+    if (!user) return;
+    const propDoc = doc(db, 'artifacts', appId, 'public', 'data', 'properties', id);
+    await updateDoc(propDoc, { status });
+  };
+
+  const updatePropertyFeedback = async (id, feedback) => {
+    if (!user) return;
+    const propDoc = doc(db, 'artifacts', appId, 'public', 'data', 'properties', id);
+    await updateDoc(propDoc, { userFeedback: feedback });
+  };
+
+  const saveNeeds = async (updatedNeeds) => {
+    if (!user) return;
+    const needsDoc = doc(db, 'artifacts', appId, 'public', 'data', 'needs', 'shared_needs');
+    await setDoc(needsDoc, updatedNeeds);
+  };
+
+  const deleteProperty = async (id) => {
+    if (!user) return;
+    const propDoc = doc(db, 'artifacts', appId, 'public', 'data', 'properties', id);
+    await deleteDoc(propDoc);
+    if (selectedId === id) setView('list');
+  };
+
+  // --- Logic ---
+  const selectedProperty = useMemo(() => 
+    properties.find(p => p.id === selectedId), [properties, selectedId]
+  );
+
+  const calculateMatchScore = (property) => {
+    let score = 0;
+    if (property.price <= needs.maxPrice) score += 20;
+    if (property.hoa <= needs.maxHOA) score += 20;
+    if (needs.targetCities.includes(property.city)) score += 15;
+    if (property.garage >= needs.garageMin) score += 15;
+    if (property.type.toLowerCase().includes(needs.preferredType.toLowerCase())) score += 10;
+    if (property.commuteTime <= needs.maxCommute) score += 20;
+    else if (property.commuteTime <= needs.maxCommute + 10) score += 10;
+    return score;
+  };
+
+  const sortedProperties = useMemo(() => {
+    return [...properties].sort((a, b) => calculateMatchScore(b) - calculateMatchScore(a));
+  }, [properties, needs]);
+
+  // --- UI Components ---
+  if (loading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 gap-4">
+        <Loader2 className="animate-spin text-blue-600" size={40} />
+        <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Syncing with Cloud...</p>
+      </div>
+    );
+  }
+
+  const Badge = ({ children, color }) => (
+    <span className={`px-2 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${color}`}>
+      {children}
+    </span>
+  );
+
+  const PropertyCard = ({ property }) => {
+    const score = calculateMatchScore(property);
+    return (
+      <div 
+        onClick={() => { setSelectedId(property.id); setView('detail'); }}
+        className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 mb-4 active:scale-95 transition-transform"
+      >
+        <div className="flex justify-between items-start mb-2">
+          <div className="flex-1 mr-2">
+            <h3 className="font-bold text-slate-800 text-lg leading-tight truncate">{property.address}</h3>
+            <p className="text-slate-500 text-sm">{property.city}, {property.state}</p>
+          </div>
+          <div className="text-right shrink-0">
+            <p className="font-bold text-blue-600 text-lg">${(property.price / 1000).toFixed(0)}k</p>
+            <p className="text-[10px] text-slate-400 font-bold">HOA: ${property.hoa}/mo</p>
+          </div>
+        </div>
+        
+        <div className="flex gap-2 mt-3 overflow-x-auto pb-1 no-scrollbar">
+          {property.status === 'visited' ? (
+            <Badge color="bg-green-100 text-green-700">Visited</Badge>
+          ) : (
+            <Badge color="bg-blue-100 text-blue-700">Interested</Badge>
+          )}
+          <Badge color={score >= 80 ? "bg-amber-100 text-amber-700" : "bg-slate-100 text-slate-700"}>
+            {score}% Match
+          </Badge>
+          <Badge color={property.commuteTime <= needs.maxCommute ? "bg-emerald-100 text-emerald-700" : "bg-rose-50 text-rose-600"}>
+            {property.commuteTime}m Commute
+          </Badge>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-24">
+      <header className="bg-white border-b sticky top-0 z-10 p-4 flex justify-between items-center">
+        <h1 className="text-xl font-black text-slate-800 flex items-center gap-2">
+          <Home className="text-blue-600" size={24} /> 
+          {view === 'list' ? 'Home Tracker' : view === 'detail' ? 'Property' : view === 'settings' ? 'My Needs' : 'Add Property'}
+        </h1>
+        {view === 'list' ? (
+          <button onClick={() => setView('add')} className="p-2 bg-blue-600 text-white rounded-full shadow-lg">
+            <Plus size={20} />
+          </button>
+        ) : (
+          <button onClick={() => setView('list')} className="text-slate-500 font-bold text-xs uppercase tracking-widest">Back</button>
+        )}
+      </header>
+
+      <main className="p-4 max-w-md mx-auto">
+        {view === 'list' && (
+          <div>
+            <div className="flex justify-between items-center mb-4">
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{properties.length} Candidates Shared</p>
+              <button onClick={() => setView('settings')} className="text-blue-600 text-[10px] font-black flex items-center gap-1 uppercase tracking-widest">
+                Edit Needs <Settings size={14} />
+              </button>
+            </div>
+            {sortedProperties.length === 0 && (
+              <div className="text-center py-20 opacity-40">
+                <Home size={40} className="mx-auto mb-2" />
+                <p className="text-sm font-bold uppercase tracking-widest">No properties yet</p>
+              </div>
+            )}
+            {sortedProperties.map(p => <PropertyCard key={p.id} property={p} />)}
+          </div>
+        )}
+
+        {view === 'detail' && selectedProperty && (
+          <div className="animate-in slide-in-from-right duration-300">
+            <div className="aspect-video bg-slate-200 rounded-2xl mb-4 overflow-hidden relative shadow-inner">
+              <img 
+                src={`https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=600&q=80`} 
+                className="w-full h-full object-cover"
+                alt="Property"
+              />
+              <div className="absolute top-2 right-2">
+                <a href={selectedProperty.url} target="_blank" className="p-2 bg-white/90 backdrop-blur rounded-full text-blue-600 flex shadow-sm">
+                  <ExternalLink size={18} />
+                </a>
+              </div>
+            </div>
+
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-black leading-tight tracking-tight">{selectedProperty.address}</h2>
+                <p className="text-slate-500 text-sm font-bold uppercase tracking-wider">{selectedProperty.city}, {selectedProperty.state}</p>
+              </div>
+              <button onClick={() => deleteProperty(selectedProperty.id)} className="p-2 text-slate-300 hover:text-red-500 transition-colors">
+                <Trash2 size={20} />
+              </button>
+            </div>
+
+            <div className={`p-4 rounded-2xl mb-6 flex items-center justify-between ${selectedProperty.commuteTime <= needs.maxCommute ? 'bg-emerald-50 border-emerald-100 border' : 'bg-rose-50 border-rose-100 border'}`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-xl ${selectedProperty.commuteTime <= needs.maxCommute ? 'bg-emerald-500' : 'bg-rose-500'} text-white`}>
+                  <Car size={20} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-widest opacity-50">Commute to Office</p>
+                  <p className="font-black text-slate-800 text-lg">{selectedProperty.commuteTime} Minutes</p>
+                </div>
+              </div>
+              <Badge color={selectedProperty.commuteTime <= needs.maxCommute ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}>
+                {selectedProperty.commuteTime <= needs.maxCommute ? 'Ideal' : 'Long'}
+              </Badge>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1">Price</p>
+                <p className="text-xl font-black text-blue-600">${selectedProperty.price.toLocaleString()}</p>
+              </div>
+              <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm">
+                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest mb-1">HOA</p>
+                <p className="text-xl font-black text-slate-800">${selectedProperty.hoa}/mo</p>
+              </div>
+            </div>
+
+            <div className="space-y-4 mb-8">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                <h3 className="font-black mb-4 flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500">
+                  <Clock size={14} className="text-blue-600" /> Showing Status
+                </h3>
+                <div className="flex p-1 bg-slate-100 rounded-xl">
+                  {['interested', 'visited'].map(s => (
+                    <button 
+                      key={s}
+                      onClick={() => updatePropertyStatus(selectedProperty.id, s)}
+                      className={`flex-1 py-3 text-xs font-black uppercase tracking-widest rounded-lg transition-all ${selectedProperty.status === s ? 'bg-white shadow-md text-blue-600' : 'text-slate-400'}`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                <h3 className="font-black mb-4 flex items-center gap-2 text-xs uppercase tracking-widest text-slate-500">
+                  <Star size={14} className="text-amber-500" /> Walkthrough Notes
+                </h3>
+                <textarea 
+                  placeholder="Share feedback with your gf here..."
+                  className="w-full h-32 p-4 bg-slate-50 rounded-xl border-none focus:ring-2 focus:ring-blue-100 text-sm font-medium leading-relaxed"
+                  value={selectedProperty.userFeedback}
+                  onChange={(e) => updatePropertyFeedback(selectedProperty.id, e.target.value)}
+                />
+              </div>
+
+              <div className="bg-slate-900 p-6 rounded-3xl shadow-2xl text-white">
+                <div className="flex justify-between items-start mb-6">
+                  <h3 className="font-black flex items-center gap-2 text-xs uppercase tracking-widest text-blue-400">
+                    <TrendingUp size={16} /> Agent Take
+                  </h3>
+                  <div className="text-right">
+                    <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest">Fair Value</p>
+                    <p className="text-2xl font-black text-blue-400">${selectedProperty.valuation.toLocaleString()}</p>
+                  </div>
+                </div>
+                <p className="text-sm text-slate-300 leading-relaxed font-medium">
+                  "{selectedProperty.expertTake}"
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {view === 'add' && (
+          <div className="animate-in slide-in-from-bottom duration-300">
+            <div className="bg-white p-8 rounded-3xl shadow-sm border">
+              <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mb-6">
+                <Plus size={28} />
+              </div>
+              <h2 className="text-2xl font-black mb-2 tracking-tight">Add New Place</h2>
+              <p className="text-sm text-slate-500 mb-8 font-medium">Paste a link from Redfin or Zillow. We'll automatically estimate commute and match score.</p>
+              
+              <input 
+                type="text" 
+                placeholder="Paste URL here..."
+                className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl mb-4 focus:border-blue-500 outline-none font-bold text-sm transition-all"
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+              />
+
+              <button 
+                onClick={addPropertyByUrl}
+                disabled={isProcessing || !newUrl}
+                className={`w-full py-5 rounded-2xl font-black uppercase tracking-widest text-white shadow-xl transition-all ${isProcessing ? 'bg-slate-300' : 'bg-blue-600 active:scale-95 shadow-blue-200'}`}
+              >
+                {isProcessing ? 'Syncing...' : 'Add To Shared List'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {view === 'settings' && (
+          <div className="animate-in fade-in duration-300 space-y-6">
+            <h2 className="text-2xl font-black tracking-tight mb-6">Global Criteria</h2>
+            <div className="space-y-4">
+              <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-4">Work Destination</label>
+                <div className="flex items-center gap-3 bg-slate-50 p-4 rounded-xl border border-slate-100 mb-6">
+                  <MapPin size={20} className="text-blue-500" />
+                  <input 
+                    type="text" 
+                    className="bg-transparent text-sm font-black w-full outline-none" 
+                    value={needs.workAddress}
+                    onChange={(e) => {
+                      const n = {...needs, workAddress: e.target.value};
+                      setNeeds(n);
+                      saveNeeds(n);
+                    }}
+                  />
+                </div>
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-4">Max Commute: {needs.maxCommute}m</label>
+                <input 
+                  type="range" min="15" max="60" step="5" className="w-full accent-blue-600"
+                  value={needs.maxCommute}
+                  onChange={(e) => {
+                    const n = {...needs, maxCommute: parseInt(e.target.value)};
+                    setNeeds(n);
+                    saveNeeds(n);
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Budget</label>
+                  <input 
+                    type="number" className="text-xl font-black w-full outline-none" 
+                    value={needs.maxPrice}
+                    onChange={(e) => {
+                      const n = {...needs, maxPrice: parseInt(e.target.value) || 0};
+                      setNeeds(n);
+                      saveNeeds(n);
+                    }}
+                  />
+                </div>
+                <div className="bg-white p-5 rounded-2xl shadow-sm border">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Max HOA</label>
+                  <input 
+                    type="number" className="text-xl font-black w-full outline-none" 
+                    value={needs.maxHOA}
+                    onChange={(e) => {
+                      const n = {...needs, maxHOA: parseInt(e.target.value) || 0};
+                      setNeeds(n);
+                      saveNeeds(n);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-100 rounded-2xl text-[10px] font-bold text-slate-400 break-all uppercase tracking-tighter">
+                User ID: {user?.uid}
+              </div>
+            </div>
+          </div>
+        )}
+      </main>
+
+      <nav className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t flex justify-around p-4 z-10 max-w-md mx-auto rounded-t-3xl shadow-2xl">
+        <button onClick={() => setView('list')} className={`flex flex-col items-center gap-1 ${view === 'list' ? 'text-blue-600' : 'text-slate-400'}`}>
+          <Home size={24} />
+          <span className="text-[10px] font-black uppercase tracking-tighter">Properties</span>
+        </button>
+        <button onClick={() => setView('settings')} className={`flex flex-col items-center gap-1 ${view === 'settings' ? 'text-blue-600' : 'text-slate-400'}`}>
+          <Settings size={24} />
+          <span className="text-[10px] font-black uppercase tracking-tighter">My Needs</span>
+        </button>
+      </nav>
+    </div>
+  );
+};
+
+export default App;
