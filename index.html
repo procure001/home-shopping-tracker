@@ -88,148 +88,120 @@
                 return () => { unsub1(); unsub2(); };
             }, [user]);
 
-            // --- Layer 3: Forensic URL Parsing (Fallback) ---
-            const parseDetailsFromUrl = (url) => {
-                try {
-                    const urlObj = new URL(url);
-                    let address = "New Entry";
-                    let city = "Unknown City";
-                    
-                    if (url.includes('redfin.com')) {
-                        const pathParts = urlObj.pathname.split('/').filter(p => p);
-                        const stateIdx = pathParts.indexOf('IL'); // Assumes IL based on user context, could be generalized
-                        if (stateIdx !== -1 && pathParts[stateIdx + 1]) {
-                            city = pathParts[stateIdx + 1].replace(/-/g, ' ');
-                            if (pathParts[stateIdx + 2]) {
-                                address = pathParts[stateIdx + 2].replace(/-[0-9]{5}$/, '').replace(/-/g, ' '); // Remove trailing zip
-                            }
-                        }
-                    } else if (url.includes('zillow.com')) {
-                        // zillow.com/homedetails/123-Main-St-City-ST-Zip/ID_zpid
-                        const pathParts = urlObj.pathname.split('/');
-                        const detailPart = pathParts.find(p => p.includes('-IL-'));
-                        if (detailPart) {
-                            const addressParts = detailPart.split('-IL-')[0].split('-');
-                            address = addressParts.join(' ');
-                            city = addressParts[addressParts.length - 2] || "Unknown"; // Rough guess
-                        }
-                    }
-                    return { 
-                        address: address.toUpperCase(), 
-                        city: city.toUpperCase(), 
-                        price: 0,
-                        hoa: 0,
-                        summary: "Data sync required. Please update manually or try syncing again.",
-                        image: "https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80" // Generic Fallback
-                    };
-                } catch (e) {
-                    return { address: "Unknown Link", city: "Unknown", price: 0, image: "" };
-                }
+            // --- Utility: Clean Data for Firestore (Prevents Undefined Errors) ---
+            const sanitizeData = (data) => {
+                const clean = {};
+                Object.keys(data).forEach(key => {
+                    if (data[key] === undefined) clean[key] = null;
+                    else clean[key] = data[key];
+                });
+                return clean;
             };
 
-            // --- Layer 2: OpenGraph Proxy Scraper ---
+            // --- Real Extraction Logic (No Simulation) ---
+            // Uses a CORS proxy to fetch raw HTML and parse OpenGraph tags
             const fetchOpenGraphData = async (url) => {
-                // Uses a CORS proxy to get raw HTML and parse meta tags
                 try {
+                    // Using allorigins.win as a CORS proxy
                     const proxyUrl = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
                     const response = await fetch(proxyUrl);
                     const json = await response.json();
                     
-                    if (!json.contents) throw new Error("No content");
+                    if (!json.contents) throw new Error("No content received");
                     
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(json.contents, "text/html");
                     
-                    const ogTitle = doc.querySelector('meta[property="og:title"]')?.content || "";
-                    const ogImage = doc.querySelector('meta[property="og:image"]')?.content;
-                    const ogDesc = doc.querySelector('meta[property="og:description"]')?.content || "";
-
-                    // Parse Price from Title/Desc
-                    // Redfin Title: "123 Main St, City, ST 12345 | MLS#..."
-                    // Redfin Desc: "3 beds, 2 baths... | $455,000"
+                    // Safe Accessors
+                    const getMeta = (prop) => doc.querySelector(`meta[property="${prop}"]`)?.content || "";
                     
-                    const priceMatch = (ogTitle + ogDesc).match(/\$[\d,]+/);
-                    const price = priceMatch ? parseInt(priceMatch[0].replace(/[$,]/g, '')) : 0;
+                    const ogTitle = getMeta("og:title");
+                    const ogImage = getMeta("og:image");
+                    const ogDesc = getMeta("og:description");
 
-                    let { address, city } = parseDetailsFromUrl(url); // Default to URL extraction
-                    if (ogTitle) {
-                        const parts = ogTitle.split(',');
-                        if (parts.length > 0) address = parts[0].trim().toUpperCase();
-                        if (parts.length > 1) city = parts[1].trim().toUpperCase();
+                    // Fallback to title tag if og:title missing
+                    const title = ogTitle || doc.title || "Unknown Property";
+
+                    // Parsing Logic for Redfin/Zillow
+                    // Example Redfin Title: "123 Main St, City, ST 12345 | MLS#..."
+                    // Example Redfin Desc: "3 beds, 2 baths... | $455,000"
+                    
+                    let price = 0;
+                    const priceMatch = (ogDesc + title).match(/\$[\d,]+/);
+                    if (priceMatch) {
+                        price = parseInt(priceMatch[0].replace(/[$,]/g, ''));
                     }
 
+                    // Extract Address/City
+                    let address = "Address Pending";
+                    let city = "";
+                    
+                    // Try to parse from Title first
+                    const parts = title.split(',');
+                    if (parts.length >= 2) {
+                        address = parts[0].trim();
+                        city = parts[1].trim();
+                    } else {
+                        // Fallback to URL parsing if title fails
+                        try {
+                            const urlObj = new URL(url);
+                            const pathParts = urlObj.pathname.split('/');
+                            // Typical Redfin pattern: /state/city/address/home/...
+                            const stateIdx = pathParts.indexOf('IL'); // Heuristic
+                            if (stateIdx !== -1 && pathParts[stateIdx + 2]) {
+                                address = pathParts[stateIdx + 2].replace(/-/g, ' ');
+                                city = pathParts[stateIdx + 1].replace(/-/g, ' ');
+                            }
+                        } catch (e) {
+                            console.warn("URL parse fail", e);
+                        }
+                    }
+
+                    // Validated Image URL or Placeholder
+                    const finalImage = (ogImage && ogImage.startsWith('http')) 
+                        ? ogImage 
+                        : "https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80";
+
                     return {
-                        address,
-                        city,
-                        price,
-                        image: ogImage,
-                        summary: ogDesc.substring(0, 150) + "...",
-                        hoa: 0 // Cannot reliably extract HOA from meta tags
+                        address: address.toUpperCase(),
+                        city: city.toUpperCase(),
+                        price: price,
+                        image: finalImage,
+                        summary: ogDesc.substring(0, 160) + "...",
+                        hoa: 0, // Defaults to 0, requires manual or AI check
+                        commuteTime: 0 // Defaults to 0
                     };
+
                 } catch (e) {
-                    console.warn("Layer 2 Failed:", e);
-                    throw e; // Fallback to Layer 3
+                    console.warn("Proxy Scraping Failed:", e);
+                    // Minimal fallback to prevent crash
+                    return {
+                        address: "New Entry (Sync Failed)",
+                        city: "Unknown",
+                        price: 0,
+                        image: "https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80",
+                        summary: "Could not auto-extract data. Please enter details manually.",
+                        hoa: 0,
+                        commuteTime: 0
+                    };
                 }
             };
 
-            // --- Layer 1: Microlink API ---
-            const fetchMicrolinkData = async (url) => {
-                const apiUrl = `https://api.microlink.io/?url=${encodeURIComponent(url)}`;
-                const res = await fetch(apiUrl);
-                const data = await res.json();
-                if (data.status !== 'success') throw new Error("Microlink failed");
-                
-                const { title, description, image } = data.data;
-                const priceMatch = (description || title).match(/\$[\d,]+/);
-                const price = priceMatch ? parseInt(priceMatch[0].replace(/[$,]/g, '')) : 0;
-                
-                let { address, city } = parseDetailsFromUrl(url); // Fallback address
-                
-                // Try to improve address from title
-                if (title && title.includes(',')) {
-                    address = title.split(',')[0].toUpperCase();
-                }
-
-                return {
-                    address,
-                    city,
-                    price,
-                    image: image?.url,
-                    summary: description || "No summary available."
-                };
-            };
-
-            const smartExtract = async (url) => {
-                // Layer 1
-                try {
-                    return await fetchMicrolinkData(url);
-                } catch (e) {
-                    console.log("Layer 1 failed, trying Layer 2...");
-                }
-
-                // Layer 2
-                try {
-                    return await fetchOpenGraphData(url);
-                } catch (e) {
-                    console.log("Layer 2 failed, using Layer 3 (URL Parse)...");
-                }
-
-                // Layer 3 (Fallback)
-                return parseDetailsFromUrl(url);
-            };
-
-            // --- Gemini (Optional Power-Up) ---
-            const enhanceWithAI = async (baseData) => {
+            // --- AI Extractor (Optional) ---
+            const enhanceWithAI = async (url, baseData) => {
                 if (!apiKey) return {};
                 try {
-                    const prompt = `Listing: ${JSON.stringify(baseData)}. 
-                    Return JSON with: { "hoa": number, "commuteTime": number (mins to Waukegan IL), "expertTake": "string analysis" }`;
+                    const prompt = `Analyze this real estate listing: ${url}. 
+                    Extract HOA fees and calculate commute to 1675 S Lakeside Dr, Waukegan IL.
+                    Context: ${JSON.stringify(baseData)}.
+                    Return JSON: { "hoa": number, "commuteTime": number (minutes), "expertTake": "Short analysis" }`;
                     
                     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, {
                         method: 'POST',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify({
                             contents: [{ parts: [{ text: prompt }] }],
+                            tools: [{ "google_search": {} }],
                             generationConfig: { responseMimeType: "application/json" }
                         })
                     });
@@ -244,18 +216,21 @@
             const handleAdd = async () => {
                 if (!newUrl) return;
                 setIsProcessing(true);
-                setStatusMsg("Scanning listing...");
+                setStatusMsg("Connecting to listing...");
                 
                 try {
-                    const extracted = await smartExtract(newUrl);
-                    let aiData = {};
+                    // 1. Scraping Layer
+                    const extracted = await fetchOpenGraphData(newUrl);
                     
+                    // 2. AI Layer (if key exists)
+                    let aiData = {};
                     if (apiKey) {
                         setStatusMsg("AI analyzing...");
-                        aiData = await enhanceWithAI(extracted);
+                        aiData = await enhanceWithAI(newUrl, extracted);
                     }
 
-                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), {
+                    // 3. Save (Sanitized)
+                    const payload = sanitizeData({
                         ...extracted,
                         ...aiData,
                         url: newUrl,
@@ -263,6 +238,8 @@
                         userFeedback: '',
                         addedAt: new Date().toISOString()
                     });
+
+                    await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'properties'), payload);
                     setNewUrl('');
                     setView('list');
                 } catch (e) {
@@ -273,14 +250,12 @@
             const handleReSync = async (propId, url) => {
                 setIsProcessing(true);
                 try {
-                    const extracted = await smartExtract(url);
+                    const extracted = await fetchOpenGraphData(url);
                     let aiData = {};
-                    if (apiKey) aiData = await enhanceWithAI(extracted);
+                    if (apiKey) aiData = await enhanceWithAI(url, extracted);
                     
-                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', propId), {
-                        ...extracted,
-                        ...aiData
-                    });
+                    const payload = sanitizeData({ ...extracted, ...aiData });
+                    await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'properties', propId), payload);
                 } catch (e) {
                     alert("Sync Error: " + e.message);
                 } finally { setIsProcessing(false); }
@@ -297,7 +272,7 @@
                 if(p.hoa <= needs.maxHOA) s+=25;
                 if(p.commuteTime && p.commuteTime <= 30) s+=25;
                 else if (!p.commuteTime) s+=10; 
-                if(p.image) s+=25;
+                if(p.image && !p.image.includes('unsplash')) s+=25; // Bonus for real image
                 return s;
             };
 
@@ -321,7 +296,7 @@
                                 {properties.map(p => (
                                     <div key={p.id} onClick={() => { setSelectedId(p.id); setView('detail'); }} className="bg-white rounded-2xl border mb-4 shadow-sm overflow-hidden active:scale-95 transition-transform">
                                         <div className="h-40 bg-slate-200 relative">
-                                            <img src={p.image || 'https://via.placeholder.com/400x200?text=No+Preview'} className="w-full h-full object-cover"/>
+                                            <img src={p.image} className="w-full h-full object-cover" onError={(e) => e.target.src='https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80'}/>
                                             <div className="absolute bottom-2 right-2 bg-blue-600 text-white text-xs font-black px-2 py-1 rounded shadow">${(p.price/1000).toFixed(0)}k</div>
                                         </div>
                                         <div className="p-4">
@@ -352,7 +327,7 @@
                         {view === 'detail' && activeProp && (
                             <div className="animate-in slide-in-from-right duration-300">
                                 <div className="h-64 bg-slate-200 rounded-3xl overflow-hidden mb-6 relative shadow-lg">
-                                    <img src={activeProp.image || 'https://via.placeholder.com/800x600?text=No+Image+Found'} className="w-full h-full object-cover"/>
+                                    <img src={activeProp.image} className="w-full h-full object-cover" onError={(e) => e.target.src='https://images.unsplash.com/photo-1560518883-ce09059eeffa?auto=format&fit=crop&w=800&q=80'}/>
                                     <a href={activeProp.url} target="_blank" className="absolute top-4 right-4 p-3 bg-white/90 rounded-full text-blue-600 shadow"><Icon name="link"/></a>
                                 </div>
                                 
